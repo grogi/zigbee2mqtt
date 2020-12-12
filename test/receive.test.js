@@ -1,5 +1,6 @@
 const data = require('./stub/data');
 const logger = require('./stub/logger');
+const stringify = require('json-stable-stringify-without-jsonify');
 const zigbeeHerdsman = require('./stub/zigbeeHerdsman');
 const MQTT = require('./stub/mqtt');
 const settings = require('../lib/util/settings');
@@ -19,18 +20,18 @@ describe('Receive', () => {
         controller = new Controller();
         await controller.start();
         mocksClear.forEach((m) => m.mockClear());
+        delete zigbeeHerdsman.devices.WXKG11LM.linkquality;
     });
 
     it('Should handle a zigbee message', async () => {
         const device = zigbeeHerdsman.devices.WXKG11LM;
+        device.linkquality = 10;
         const data = {onOff: 1}
         const payload = {data, cluster: 'genOnOff', device, endpoint: device.getEndpoint(1), type: 'attributeReport', linkquality: 10};
         await zigbeeHerdsman.events.message(payload);
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
-        expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/button');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({click: 'single', linkquality: 10});
-        expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
+        expect(MQTT.publish).toHaveBeenCalledWith('zigbee2mqtt/button', stringify({action: 'single', click: 'single', linkquality: 10}), {retain: false, qos: 0}, expect.any(Function));
     });
 
     it('Should handle a zigbee message which uses ep (left)', async () => {
@@ -41,7 +42,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/button_double_key');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({click: 'left', linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({click: 'left', action: 'single_left'});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
     });
 
@@ -53,7 +54,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/button_double_key');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({click: 'right', linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({click: 'right', action: 'single_right'});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
     });
 
@@ -65,8 +66,37 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/weather_sensor');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: -0.85, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: -0.85});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 1, "retain": false});
+    });
+
+    it('Should allow to invert cover', async () => {
+        const device = zigbeeHerdsman.devices.J1;
+
+        // Non-inverted (open = 100, close = 0)
+        await zigbeeHerdsman.events.message({data: {currentPositionLiftPercentage: 90, currentPositionTiltPercentage: 80}, cluster: 'closuresWindowCovering', device, endpoint: device.getEndpoint(1), type: 'attributeReport', linkquality: 10});
+        await flushPromises();
+        expect(MQTT.publish).toHaveBeenCalledTimes(1);
+        expect(MQTT.publish).toHaveBeenCalledWith('zigbee2mqtt/J1_cover', stringify({position: 10, tilt: 20}), {retain: false, qos: 0}, expect.any(Function));
+
+        // Inverted
+        MQTT.publish.mockClear();
+        settings.set(['devices', device.ieeeAddr, 'invert_cover'], true);
+        await zigbeeHerdsman.events.message({data: {currentPositionLiftPercentage: 90, currentPositionTiltPercentage: 80}, cluster: 'closuresWindowCovering', device, endpoint: device.getEndpoint(1), type: 'attributeReport', linkquality: 10});
+        await flushPromises();
+        expect(MQTT.publish).toHaveBeenCalledTimes(1);
+        expect(MQTT.publish).toHaveBeenCalledWith('zigbee2mqtt/J1_cover', stringify({position: 90, tilt: 80}), {retain: false, qos: 0}, expect.any(Function));
+    });
+
+    it('Should allow to disable the legacy integration', async () => {
+        const device = zigbeeHerdsman.devices.WXKG11LM;
+        settings.set(['devices', device.ieeeAddr, 'legacy'], false);
+        const data = {onOff: 1}
+        const payload = {data, cluster: 'genOnOff', device, endpoint: device.getEndpoint(1), type: 'attributeReport', linkquality: 10};
+        await zigbeeHerdsman.events.message(payload);
+        await flushPromises();
+        expect(MQTT.publish).toHaveBeenCalledTimes(1);
+        expect(MQTT.publish).toHaveBeenCalledWith('zigbee2mqtt/button', stringify({action: 'single'}), {retain: false, qos: 0}, expect.any(Function));
     });
 
     it('Should debounce messages', async () => {
@@ -89,7 +119,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/weather_sensor');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: 0.08, humidity: 0.01, pressure: 2, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: 0.08, humidity: 0.01, pressure: 2});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 1, "retain": false});
     });
 
@@ -115,7 +145,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/weather_sensor');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: 0.08, humidity: 0.01, pressure: 2, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: 0.08, humidity: 0.01, pressure: 2});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 1, "retain": true});
     });
 
@@ -135,11 +165,25 @@ describe('Receive', () => {
         await flushPromises();
         jest.advanceTimersByTime(50);
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: 0.08, pressure: 2, linkquality: 13});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: 0.08, pressure: 2});
         jest.runAllTimers();
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(2);
-        expect(JSON.parse(MQTT.publish.mock.calls[1][1])).toStrictEqual({temperature: 0.07, pressure: 2, humidity: 0.03, linkquality: 13});
+        expect(JSON.parse(MQTT.publish.mock.calls[1][1])).toStrictEqual({temperature: 0.07, pressure: 2, humidity: 0.03});
+    });
+
+    it('Shouldnt republish old state', async () => {
+        // https://github.com/Koenkk/zigbee2mqtt/issues/3572
+        jest.useFakeTimers();
+        const device = zigbeeHerdsman.devices.bulb;
+        settings.set(['devices', device.ieeeAddr, 'debounce'], 0.1);
+        await zigbeeHerdsman.events.message({data: {onOff: 0}, cluster: 'genOnOff', device, endpoint: device.getEndpoint(1), type: 'attributeReport', linkquality: 10});
+        await MQTT.events.message('zigbee2mqtt/bulb/set', stringify({state: 'ON'}));
+        await flushPromises();
+        jest.runAllTimers();
+        expect(MQTT.publish).toHaveBeenCalledTimes(2);
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({state: 'ON'});
+        expect(JSON.parse(MQTT.publish.mock.calls[1][1])).toStrictEqual({state: 'ON'});
     });
 
     it('Should handle a zigbee message with 1 precision', async () => {
@@ -151,7 +195,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/weather_sensor');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: -0.8, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: -0.8});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 1, "retain": false});
     });
 
@@ -164,7 +208,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/weather_sensor');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: -1, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: -1});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 1, "retain": false});
     });
 
@@ -177,7 +221,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/weather_sensor');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: -0.8, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: -0.8});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 1, "retain": false});
     });
 
@@ -191,7 +235,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/weather_sensor');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: -1, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({temperature: -1});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 1, "retain": false});
     });
 
@@ -204,14 +248,14 @@ describe('Receive', () => {
         await zigbeeHerdsman.events.message(payload);
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({"battery":91,"voltage":2985,"temperature":23.5,"humidity":46.08,"pressure":915.5,"linkquality":10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({"battery":91,"voltage":2985,"temperature":23.5,"humidity":46.08,"pressure":915.5});
 
         MQTT.publish.mockClear();
         payload = {data: {"16":9354,"20":-1,"measuredValue":915}, cluster: 'msPressureMeasurement', device, endpoint: device.getEndpoint(1), type: 'attributeReport', linkquality: 10};
         await zigbeeHerdsman.events.message(payload);
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({"battery":91,"voltage":2985,"temperature":23.5,"humidity":46.08,"pressure":935.4,"linkquality":10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({"battery":91,"voltage":2985,"temperature":23.5,"humidity":46.08,"pressure":935.4});
     });
 
     it('Should handle a zigbee message with voltage 3010', async () => {
@@ -222,7 +266,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/button_double_key');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({battery: 100, voltage: 3010, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({battery: 100, voltage: 3010});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
     });
 
@@ -234,7 +278,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/button_double_key');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({battery: 35, voltage: 2850, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({battery: 35, voltage: 2850});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
     });
 
@@ -246,7 +290,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/button_double_key');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({battery: 14, voltage: 2650, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({battery: 14, voltage: 2650});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
     });
 
@@ -258,7 +302,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/button_double_key');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({battery: 0, voltage: 2000, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({battery: 0, voltage: 2000});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
     });
 
@@ -270,7 +314,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/occupancy_sensor');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({'battery': 100, 'illuminance': 381, "illuminance_lux": 381, 'voltage': 3045, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({'battery': 100, 'illuminance': 381, "illuminance_lux": 381, 'voltage': 3045});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
     });
 
@@ -322,13 +366,18 @@ describe('Receive', () => {
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
     });
 
-    it('Should not handle messages forwarded Xiaomi messages', async () => {
+    it('Should handle forwarded Xiaomi messages', async () => {
         const device = zigbeeHerdsman.devices.ZNCZ02LM;
-        const data = {onOff: 1};
-        const payload = {data, cluster: 'genOnOff', device, endpoint: device.getEndpoint(1), type: 'attributeReport', linkquality: 10, groupID: 599};
+        const payload = {data: {measuredValue: -85}, cluster: 'msTemperatureMeasurement', device, endpoint: device.getEndpoint(1), type: 'attributeReport', linkquality: 10, groupID: 6539};
         await zigbeeHerdsman.events.message(payload);
         await flushPromises();
-        expect(MQTT.publish).toHaveBeenCalledTimes(0);
+        expect(MQTT.publish).toHaveBeenCalledTimes(1);
+        expect(MQTT.publish).toHaveBeenCalledWith(
+            'zigbee2mqtt/weather_sensor',
+            stringify({temperature: -0.85}),
+            {"qos": 1, "retain": false},
+            expect.any(Function),
+        )
     });
 
     it('Should handle messages from Xiaomi router devices', async () => {
@@ -337,10 +386,20 @@ describe('Receive', () => {
         const payload = {data, cluster: 'genOnOff', device, endpoint: device.getEndpoint(1), type: 'attributeReport', linkquality: 20};
         await zigbeeHerdsman.events.message(payload);
         await flushPromises();
-        expect(MQTT.publish).toHaveBeenCalledTimes(1);
-        expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/power_plug');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({'state': 'ON', linkquality: 20});
-        expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
+        expect(MQTT.publish).toHaveBeenCalledTimes(2);
+        expect(MQTT.publish).toHaveBeenCalledWith(
+            'zigbee2mqtt/power_plug',
+            stringify({state: 'ON'}),
+            { retain: false, qos: 0 },
+            expect.any(Function)
+        );
+        expect(MQTT.publish).toHaveBeenCalledWith(
+            'zigbee2mqtt/switch_group',
+            stringify({'state': 'ON'}),
+            { retain: false, qos: 0 },
+            expect.any(Function)
+        );
+
     });
 
     it('Should not handle messages from coordinator', async () => {
@@ -352,23 +411,27 @@ describe('Receive', () => {
         expect(MQTT.publish).toHaveBeenCalledTimes(0);
     });
 
-    it('Should not handle messages from unsupported devices', async () => {
+    it('Should not handle messages from unsupported devices and link to docs', async () => {
         const device = zigbeeHerdsman.devices.unsupported;
         const data = {onOff: 1};
+        logger.warn.mockClear();
         const payload = {data, cluster: 'genOnOff', device, endpoint: device.getEndpoint(1), type: 'attributeReport', linkquality: 10};
         await zigbeeHerdsman.events.message(payload);
         await flushPromises();
+        expect(logger.warn).toHaveBeenCalledWith(`Received message from unsupported device with Zigbee model 'notSupportedModelID' and manufacturer name 'notSupportedMfg'`);
+        expect(logger.warn).toHaveBeenCalledWith(`Please see: https://www.zigbee2mqtt.io/how_tos/how_to_support_new_devices.html.`);
         expect(MQTT.publish).toHaveBeenCalledTimes(0);
     });
 
-    it('Should not handle messages from still interviewing devices with unknown modelID', async () => {
+    it('Should not handle messages from still interviewing devices with unknown definition', async () => {
         const device = zigbeeHerdsman.devices.interviewing;
         const data = {onOff: 1};
+        logger.debug.mockClear();
         const payload = {data, cluster: 'genOnOff', device, endpoint: device.getEndpoint(1), type: 'attributeReport', linkquality: 10};
         await zigbeeHerdsman.events.message(payload);
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(0);
-        expect(logger.debug).toHaveBeenCalledWith(`Skipping message, modelID is undefined and still interviewing`);
+        expect(logger.debug).toHaveBeenCalledWith(`Skipping message, definition is undefined and still interviewing`);
     });
 
     it('Should handle a command', async () => {
@@ -379,7 +442,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/ikea_onoff');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({'click': 'brightness_stop', linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({'click': 'brightness_stop', action: 'brightness_stop'});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
     });
 
@@ -397,10 +460,10 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(2);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/ikea_onoff');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({'click': 'brightness_stop'});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({'click': 'brightness_stop', action: 'brightness_stop'});
         expect(MQTT.publish.mock.calls[0][2]).toStrictEqual({"qos": 0, "retain": false});
         expect(MQTT.publish.mock.calls[1][0]).toStrictEqual('zigbee2mqtt/ikea_onoff');
-        expect(JSON.parse(MQTT.publish.mock.calls[1][1])).toMatchObject({'click': 'brightness_stop'});
+        expect(JSON.parse(MQTT.publish.mock.calls[1][1])).toMatchObject({'click': 'brightness_stop', action: 'brightness_stop'});
         expect(JSON.parse(MQTT.publish.mock.calls[1][1]).elapsed).toBe(50);
         expect(MQTT.publish.mock.calls[1][2]).toStrictEqual({"qos": 0, "retain": false});
         Date.now = oldNow;
@@ -426,7 +489,7 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/SP600_NEW');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({energy: 0.66, power: 49.6, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({energy: 0.66, power: 49.6});
 
         MQTT.publish.mockClear();
         const SP600_OLD = zigbeeHerdsman.devices.SP600_OLD;
@@ -434,6 +497,6 @@ describe('Receive', () => {
         await flushPromises();
         expect(MQTT.publish).toHaveBeenCalledTimes(1);
         expect(MQTT.publish.mock.calls[0][0]).toStrictEqual('zigbee2mqtt/SP600_OLD');
-        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({energy: 6.648, power: 496, linkquality: 10});
+        expect(JSON.parse(MQTT.publish.mock.calls[0][1])).toStrictEqual({energy: 6.648, power: 496});
     });
 });

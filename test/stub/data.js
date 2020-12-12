@@ -2,9 +2,11 @@ const tmp = require('tmp');
 const yaml = require('../../lib/util/yaml');
 const path = require('path');
 const fs = require('fs');
+const stringify = require('json-stable-stringify-without-jsonify');
 
 const mockDir = tmp.dirSync().name;
 const mockDirStorage = tmp.dirSync().name;
+const stateFile = path.join(mockDir, 'state.json');
 
 function writeDefaultConfiguration() {
     const config = {
@@ -108,7 +110,7 @@ function writeDefaultConfiguration() {
             },
             '0x0017880104e45551': {
                 retain: false,
-                friendly_name: 'smart_vent'
+                friendly_name: 'smart vent'
             },
             '0x0017880104e45552': {
                 retain: false,
@@ -153,7 +155,16 @@ function writeDefaultConfiguration() {
             },
             '0x0017880104e44559': {
                 friendly_name: '3157100_thermostat',
-            }
+            },
+            '0x0017880104a44559': {
+                friendly_name: 'J1_cover',
+            },
+            '0x0017882104a44559': {
+                friendly_name: 'TS0601_thermostat',
+            },
+            '0x0017882194e45543': {
+                friendly_name: 'QS-Zigbee-D02-TRIAC-2C-LN',
+            },
         },
         groups: {
             '1': {
@@ -174,14 +185,35 @@ function writeDefaultConfiguration() {
                 retain: false,
                 devices: ['bulb_2']
             },
-        }
+            '12': {
+                friendly_name: 'thermostat_group',
+                retain: false,
+                devices: ['TS0601_thermostat'],
+            },
+            '14': {
+                friendly_name: 'switch_group',
+                retain: false,
+                devices: ['power_plug'],
+            }
+        },
+        external_converters: [],
     };
 
     yaml.writeIfChanged(path.join(mockDir, 'configuration.yaml'), config);
 }
 
 function writeEmptyState() {
-    fs.writeFileSync(path.join(mockDir, 'state.json'), JSON.stringify({}));
+    fs.writeFileSync(stateFile, stringify({}));
+}
+
+function removeState() {
+    if (stateExists()) {
+        fs.unlinkSync(stateFile);
+    }
+}
+
+function stateExists() {
+    return fs.existsSync(stateFile);
 }
 
 function writeDefaultState() {
@@ -197,11 +229,7 @@ function writeDefaultState() {
         },
     }
 
-    fs.writeFileSync(path.join(mockDir, 'state.json'), JSON.stringify(state));
-}
-
-function removeState() {
-    fs.unlinkSync(path.join(mockDir, 'state.json'))
+    fs.writeFileSync(path.join(mockDir, 'state.json'), stringify(state));
 }
 
 jest.mock('../../lib/util/data', () => ({
@@ -219,4 +247,5 @@ module.exports = {
     writeDefaultState,
     removeState,
     writeEmptyState,
+    stateExists,
 };
